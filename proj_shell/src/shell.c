@@ -114,10 +114,10 @@ int main(int argc, char *argv[]){
 
 int ExecuteCmd(char *argvp) {
 
-    char cmd[1024];
-    char *pch;  //temp string
-    char *exec_cmd[4];    //cmd
-    int i = 0;
+	char cmd[1024];
+	char *pch;  //temp string
+	char *exec_cmd[4];    //cmd
+	int i = 0;
 
 	strcpy(cmd, argvp);
 	//just execute cmd
