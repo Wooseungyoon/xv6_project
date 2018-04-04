@@ -48,6 +48,12 @@ sys_getppid(void)
 	return myproc()->parent->pid;
 }
 
+void
+sys_yield(void)
+{
+	yield();
+}
+
 int
 sys_sbrk(void)
 {
