@@ -52,6 +52,15 @@ sys_getppid(void)
 void
 sys_yield(void)
 {
+	struct proc * p = myproc();
+	static int check = 0;
+	int stride_share = 100 - mlfq_share;
+	check += stride_share;
+	if (check > 100) {
+		p->ticks++;
+		totalticks++;
+		check -= 100;
+	}
 	yield();
 }
 

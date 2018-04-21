@@ -111,7 +111,7 @@ trap(struct trapframe *tf)
 	  if (p->cpu_share == 0) {
 		  acquire(&tickslock);
 		  p->ticks++;
-		  p->ticks_in_queue++;
+		  totalticks++;
 		  release(&tickslock);
 		  if (p->ticks < quantum[p->level])
 			  return;

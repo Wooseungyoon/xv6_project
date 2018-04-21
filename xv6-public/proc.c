@@ -22,9 +22,8 @@ static void wakeup1(void *chan);
 
 // stride
 int mlfq_pass = 0;
-int mlfq_share = 100;
 int mlfq_stride = (int)(10000 / 100);
-int stride_count = 0;
+int mlfq_share = 100;
 
 // mlfq
 int totalticks = 0;		// for boosting
@@ -103,7 +102,6 @@ found:
   // initailze for mlfq and stide scheduling
   p->level = 0;
   p->ticks = 0;
-  p->ticks_in_queue = 0;
   p->cpu_share = 0;
   p->stride = 0;
   p->pass = 0;
@@ -296,6 +294,7 @@ wait(void)
 {
   struct proc *p;
   int havekids, pid;
+  int level, i, j;
   struct proc *curproc = myproc();
   
   acquire(&ptable.lock);
@@ -307,6 +306,17 @@ wait(void)
         continue;
       havekids = 1;
       if(p->state == ZOMBIE){
+		level = p->level;
+		if (p->stride == 0) {
+			for (i = 0; i <= q_count[level]; i++) {
+				if (p == q[level][i]) {
+					for (j = i; j <= q_count[level] - 1; j++)
+						q[level][j] = q[level][j + 1];
+					q_count[level]--;
+					break;
+				}
+			}	
+		}
         // Found one.
         pid = p->pid;
         kfree(p->kstack);
@@ -319,7 +329,6 @@ wait(void)
 		// initailize variables for sceduling
 		p->level = 0;
 		p->ticks = 0;
-		p->ticks_in_queue = 0;
 		mlfq_share += p->cpu_share;
 		mlfq_stride = (int) (10000 / mlfq_share);
 		p->cpu_share = 0;
@@ -387,7 +396,6 @@ set_cpu_share(int share) {
 	p->cpu_share = share;
 	p->stride = (int)(10000 / share);
 	p->pass = min_pass;
-	stride_count++;
 
 	release(&ptable.lock);
 	return share;
@@ -421,20 +429,19 @@ scheduler(void)
 
 	// Find minimum pass of process 
 	for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-	  if (p->state != RUNNABLE && p->cpu_share != 0 && p->pass < min_pass) {
+	  if (p->state == RUNNABLE && p->cpu_share != 0 && p->pass <= min_pass) {
 		min = p;
 		min_pass = p->pass;
 	  }
 	}
 
 	// if not mlfq is minimum pass
-	if (min_pass != mlfq_pass) {
-		cprintf("pass : %d\n", min_pass);
+	if (min) {
 		p = min;
 		p->pass += p->stride;
 		c->proc = p;
 		switchuvm(p);
-		p->state = RUNNABLE;
+		p->state = RUNNING;
 		swtch(&c->scheduler, p->context);
 		switchkvm();
 		c->proc = 0;
@@ -452,7 +459,6 @@ scheduler(void)
 				q[0][j] = p;
 				p->level = 0;
 				p->ticks = 0;
-				p->ticks_in_queue = 0;
 				q[1][i] = 0;
 				q_count[0]++;
 			}
@@ -462,7 +468,6 @@ scheduler(void)
 				q[0][j] = p;
 				p->level = 0;
 				p->ticks = 0;
-				p->ticks_in_queue = 0;
 				q[2][i] = 0;
 				q_count[0]++;
 			}
@@ -480,26 +485,23 @@ scheduler(void)
 					continue;
 				}	
 			}
-			if (q_count[level] != -1 && mlfq_turn) {
+			if (q_count[level]!= -1 && mlfq_turn) {
 				for (i = 0; i <= q_count[level]; i++) {
-					if (q[level][i]->state != RUNNABLE)
+					if (q[level][i]->state != RUNNABLE) 
 						continue;
 					p = q[level][i];
 					c->proc = q[level][i];
-				//	cprintf("from q%d name : %s, ticks : %d\n", level, p->name, p->ticks_in_queue);
 					switchuvm(p);
 					p->state = RUNNING;
 					swtch(&c->scheduler, p->context);
 					switchkvm();
 					mlfq_turn = 0;
-					totalticks += p->ticks;
-					//cprintf("pid : %d, ticks : %d\n", p->pid, p->ticks_in_queue);
-					p->ticks = 0;
-					if (level != 2 && p->ticks_in_queue >= allotment[level]) {
-						// If a process uses too much CPU time, it will be moved to a lower-priority queue.
+
+					// If a process uses too much CPU time, it will be moved to a lower-priority queue.
+					if (level != 2 && p->ticks >= allotment[level]) {
 						q_count[level + 1]++;
 						c->proc->level++;
-						c->proc->ticks_in_queue = 0;
+						c->proc->ticks = 0;
 						q[level + 1][q_count[level + 1]] = c->proc;
 
 						// delete process in queue
@@ -600,21 +602,26 @@ sleep(void *chan, struct spinlock *lk)
     acquire(&ptable.lock);  //DOC: sleeplock1
     release(lk);
   }
+
+  // dequeue 
+  if (p->stride == 0) {
+	  level = p->level;
+	  for (i = 0; i <= q_count[level]; i++)
+		  if (p == q[level][i]) {
+			  for (j = i; j <= q_count[level] - 1; j++)
+				  q[level][j] = q[level][j + 1];
+			  q[level][q_count[level]] = 0;
+			  q_count[level]--;
+			  break;
+		  }
+  } 
+  else {
+	  p->pass = 0;
+  }
+ 
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
-  
-  // dequeue 
-  level = p->level;
-  for (i = 0; i <= q_count[level]; i++)
-	  if (p->pid == q[level][i]->pid)
-		  break;
-  for (j = i; j <= q_count[level] - 1; j++)
-	q[level][j] = q[level][j + 1];
-  q[level][q_count[level]] = 0;
-  q_count[level]--;
-
-  p->pass = 0;
   
   sched();
 
@@ -634,27 +641,28 @@ sleep(void *chan, struct spinlock *lk)
 static void
 wakeup1(void *chan)
 {
-  struct proc *p;
-  int level, i;
+  struct proc *p, *sp;
+  int i;
+  int min_pass = mlfq_pass;
 
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
     if(p->state == SLEEPING && p->chan == chan) {
 		p->ticks = 0;
-		p->ticks_in_queue = 0;
 		p->level = 0;
-		level = 0;
+		p->state = RUNNABLE;
 		// if process is in mlfq
 		if (p->stride == 0) {
-			
-			q_count[level]++;
-			for (i = q_count[level]; i > 0; i--)
-				q[level][i] = q[level][i - 1];
-			q[level][0] = p;
+			q_count[0]++;
+			for (i = q_count[0]; i > 0; i--)
+				q[0][i] = q[0][i - 1];
+			q[0][0] = p;
 		} // if process is in stride
 		else {
-			p->pass = mlfq_pass;				
+			for (sp = ptable.proc; sp < &ptable.proc[NPROC]; sp++)
+				if (sp != p && sp->stride && sp->state == RUNNABLE)
+					min_pass = (min_pass > sp->pass) ? sp->pass : min_pass;
+			p->pass = min_pass;
 		}
-		p->state = RUNNABLE;
 	}
 }
 

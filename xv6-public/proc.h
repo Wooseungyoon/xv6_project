@@ -12,6 +12,8 @@ struct cpu {
 
 extern struct cpu cpus[NCPU];
 extern int ncpu;
+extern int mlfq_share;
+extern int totalticks;
 
 //PAGEBREAK: 17
 // Saved registers for kernel context switches.
@@ -53,7 +55,6 @@ struct proc {
   // mlfq
   int level;
   int ticks;
-  int ticks_in_queue;
   
   // stride
   int stride;
