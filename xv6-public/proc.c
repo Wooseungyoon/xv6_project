@@ -361,13 +361,11 @@ set_cpu_share(int share) {
 	
 	// no negative share
 	if (share < 0) {
-		cprintf("No negative share!!!\n");
 		return -1;
 	}
 
 	// Total stride processes are able to get at most 80% of CPU time
 	if (mlfq_share - share <= 20) {
-		cprintf("Raise total stride share exceed 80%"); 
 		return -1;
 	}
 

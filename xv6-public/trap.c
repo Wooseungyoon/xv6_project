@@ -113,7 +113,7 @@ trap(struct trapframe *tf)
 		  p->ticks++;
 		  totalticks++;
 		  release(&tickslock);
-		  if (p->ticks < quantum[p->level])
+		  if (p->ticks % quantum[p->level] != 0)
 			  return;
 	  }
 	  yield();
