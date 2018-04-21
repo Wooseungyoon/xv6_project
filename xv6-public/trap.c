@@ -14,6 +14,7 @@ extern uint vectors[];  // in vectors.S: array of 256 entry pointers
 struct spinlock tickslock;
 uint ticks;
 
+// mlfq
 int quantum[3] = {1, 2, 4};
 
 void
@@ -108,11 +109,14 @@ trap(struct trapframe *tf)
   if(myproc() && myproc()->state == RUNNING &&
      tf->trapno == T_IRQ0+IRQ_TIMER) {
 	  struct proc *p = myproc();
+	  // if process is in mlfq
+	  // stride have not to check
 	  if (p->cpu_share == 0) {
 		  acquire(&tickslock);
 		  p->ticks++;
 		  totalticks++;
 		  release(&tickslock);
+		  // check quantum
 		  if (p->ticks % quantum[p->level] != 0)
 			  return;
 	  }

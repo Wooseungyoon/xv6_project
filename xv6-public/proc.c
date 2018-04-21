@@ -21,15 +21,15 @@ extern void trapret(void);
 static void wakeup1(void *chan);
 
 // stride
-int mlfq_pass = 0;
-int mlfq_stride = (int)(10000 / 100);
-int mlfq_share = 100;
+int mlfq_pass = 0;							// pass of mlfq
+int mlfq_stride = (int)(10000 / 100);		// stride of mlfq, intial CPU share value is 100
+int mlfq_share = 100;						// CPU share of mlfq
 
 // mlfq
-int totalticks = 0;		// for boosting
-int q_count[3] = {-1, -1, -1};			// the number of level queue
-struct proc *q[3][NPROC];	// multi level level queue
-int allotment[3] = {5, 10, 1000};
+int totalticks = 0;							// for boosting
+int q_count[3] = {-1, -1, -1};				// the number of process in queue per level
+struct proc *q[3][NPROC];					// multi level queue
+int allotment[3] = {5, 10, 1000};			// allotment per queue
 
 void
 pinit(void)
@@ -100,6 +100,7 @@ found:
   p->state = EMBRYO;
   p->pid = nextpid++;
   // initailze for mlfq and stide scheduling
+  // At first, all processes enter to queue of level 0
   p->level = 0;
   p->ticks = 0;
   p->cpu_share = 0;
@@ -306,6 +307,7 @@ wait(void)
         continue;
       havekids = 1;
       if(p->state == ZOMBIE){
+		// if p is in mlfq, must dequeue!!
 		level = p->level;
 		if (p->stride == 0) {
 			for (i = 0; i <= q_count[level]; i++) {
@@ -389,6 +391,7 @@ set_cpu_share(int share) {
 	q[p->level][q_count[p->level]] = 0;
 	q_count[p->level]--;
 
+	// initialize variables for stride scheduling
 	mlfq_share -= share;
 	mlfq_stride = (int)(10000 / mlfq_share);
 	p->cpu_share = share;
@@ -601,7 +604,7 @@ sleep(void *chan, struct spinlock *lk)
     release(lk);
   }
 
-  // dequeue 
+  // if p is in mlfq, must delete in mlfq
   if (p->stride == 0) {
 	  level = p->level;
 	  for (i = 0; i <= q_count[level]; i++)
@@ -614,6 +617,7 @@ sleep(void *chan, struct spinlock *lk)
 		  }
   } 
   else {
+  // if p is in stride
 	  p->pass = 0;
   }
  

@@ -53,6 +53,7 @@ void
 sys_yield(void)
 {
 	struct proc * p = myproc();
+	// check variable prevent gaming sheduling
 	static int check = 0;
 	int stride_share = 100 - mlfq_share;
 	check += stride_share;
