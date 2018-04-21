@@ -14,6 +14,8 @@ extern uint vectors[];  // in vectors.S: array of 256 entry pointers
 struct spinlock tickslock;
 uint ticks;
 
+int quantum[3] = {1, 2, 4};
+
 void
 tvinit(void)
 {
@@ -94,6 +96,7 @@ trap(struct trapframe *tf)
     myproc()->killed = 1;
   }
 
+  
   // Force process exit if it has been killed and is in user space.
   // (If it is still executing in the kernel, let it keep running
   // until it gets to the regular system call return.)
@@ -103,8 +106,18 @@ trap(struct trapframe *tf)
   // Force process to give up CPU on clock tick.
   // If interrupts were on while locks held, would need to check nlock.
   if(myproc() && myproc()->state == RUNNING &&
-     tf->trapno == T_IRQ0+IRQ_TIMER)
-    yield();
+     tf->trapno == T_IRQ0+IRQ_TIMER) {
+	  struct proc *p = myproc();
+	  if (p->cpu_share == 0) {
+		  acquire(&tickslock);
+		  p->ticks++;
+		  p->ticks_in_queue++;
+		  release(&tickslock);
+		  if (p->ticks < quantum[p->level])
+			  return;
+	  }
+	  yield();
+  }
 
   // Check if the process has been killed since we yielded
   if(myproc() && myproc()->killed && (tf->cs&3) == DPL_USER)

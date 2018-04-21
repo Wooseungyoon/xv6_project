@@ -52,10 +52,13 @@ struct proc {
 
   // mlfq
   int level;
+  int ticks;
+  int ticks_in_queue;
   
   // stride
   int stride;
   int cpu_share;
+  int pass;
 };
 
 // Process memory is laid out contiguously, low addresses first:

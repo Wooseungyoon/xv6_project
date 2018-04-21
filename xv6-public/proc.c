@@ -24,6 +24,13 @@ static void wakeup1(void *chan);
 int mlfq_pass = 0;
 int mlfq_share = 100;
 int mlfq_stride = (int)(10000 / 100);
+int stride_count = 0;
+
+// mlfq
+int totalticks = 0;		// for boosting
+int q_count[3] = {-1, -1, -1};			// the number of level queue
+struct proc *q[3][NPROC];	// multi level level queue
+int allotment[3] = {5, 10, 1000};
 
 void
 pinit(void)
@@ -93,6 +100,15 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
+  // initailze for mlfq and stide scheduling
+  p->level = 0;
+  p->ticks = 0;
+  p->ticks_in_queue = 0;
+  p->cpu_share = 0;
+  p->stride = 0;
+  p->pass = 0;
+  q_count[0]++;
+  q[0][q_count[0]] = p;
 
   release(&ptable.lock);
 
@@ -222,6 +238,7 @@ fork(void)
   np->state = RUNNABLE;
 
   release(&ptable.lock);
+  //cprintf("fork : %d\n", pid);
 
   return pid;
 }
@@ -299,6 +316,16 @@ wait(void)
         p->parent = 0;
         p->name[0] = 0;
         p->killed = 0;
+		// initailize variables for sceduling
+		p->level = 0;
+		p->ticks = 0;
+		p->ticks_in_queue = 0;
+		mlfq_share += p->cpu_share;
+		mlfq_stride = (int) (10000 / mlfq_share);
+		p->cpu_share = 0;
+		p->stride = 0;
+		p->pass = 0;
+	
         p->state = UNUSED;
         release(&ptable.lock);
         return pid;
@@ -320,6 +347,7 @@ int
 set_cpu_share(int share) {
 
 	struct proc *p;
+	int min_pass = mlfq_pass;
 	
 	// no negative share
 	if (share < 0) {
@@ -333,12 +361,23 @@ set_cpu_share(int share) {
 		return -1;
 	}
 
+	acquire(&ptable.lock);
+
+	// Find minimum pass of process 
+	for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+		if (p->state == RUNNABLE && p->stride != 0)
+			min_pass = (min_pass > p->pass) ? p->pass : min_pass;
+	}
+	release(&ptable.lock);
+
 	p = myproc();
 
 	mlfq_share -= share;
 	mlfq_stride = (int)(10000 / mlfq_share);
 	p->cpu_share = share;
 	p->stride = (int)(10000 / share);
+	p->pass = min_pass;
+	stride_count++;
 	return share;
 }
 
@@ -356,33 +395,116 @@ scheduler(void)
   struct proc *p;
   struct cpu *c = mycpu();
   c->proc = 0;
+  int i, j;
+  int level;
+  int mlfq_turn = 0;
   
   for(;;){
     // Enable interrupts on this processor.
     sti();
 
-    // Loop over process table looking for process to run.
     acquire(&ptable.lock);
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+	struct proc *min = 0;
+	int min_pass = mlfq_pass;
+
+	// Find minimum pass of process 
+	for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->state != RUNNABLE)
         continue;
+	  if (p->cpu_share != 0 && p->pass < min_pass) {
+		min = p;
+		min_pass = p->pass;
+	  }
+	}
 
-      // Switch to chosen process.  It is the process's job
-      // to release ptable.lock and then reacquire it
-      // before jumping back to us.
-      c->proc = p;
-      switchuvm(p);
-      p->state = RUNNING;
+	// if not mlfq is minimum pass
+	if (min) {
+		cprintf("from stide id =%d name =%s\n", min->pid,min->name);
+		p = min;
+		p->pass += p->stride;
+		c->proc = p;
+		switchuvm(p);
+		p->state = RUNNABLE;
+		swtch(&c->scheduler, p->context);
+		switchkvm();
+		c->proc = 0;
+	} 
+	// if mlfq is minimum pass
+	else {
+		mlfq_pass += mlfq_stride;
+		mlfq_turn = 1;
 
-      swtch(&(c->scheduler), p->context);
-      switchkvm();
+		// boosting!!!!
+		if (totalticks >= 100) {
+			cprintf("[do boosting!]\n");
+			for (i = 0, j = q_count[0] + 1; i <= q_count[1]; i++, j++) {
+				p = q[1][i];
+				q[0][j] = p;
+				p->level = 0;
+				p->ticks = 0;
+				p->ticks_in_queue = 0;
+				q[1][i] = 0;
+				q_count[0]++;
+			}
+			q_count[1] = -1;
+			for (i = 0, j = q_count[0] + 1; i <= q_count[2]; i++, j++) {
+				p = q[2][i];
+				q[0][j] = p;
+				p->level = 0;
+				p->ticks = 0;
+				p->ticks_in_queue = 0;
+				q[2][i] = 0;
+				q_count[0]++;
+			}
+			q_count[2] = -1;
+		}
 
-      // Process is done running for now.
-      // It should have changed its p->state before coming back.
-      c->proc = 0;
-    }
-    release(&ptable.lock);
+		for (level = 0; level < 3; level++) {
+			// if upper level queue has process
+			if (mlfq_turn) {
+				if ((level == 1 && q_count[0] != -1) ||
+						(level == 2 && q_count[1] != -1 
+						 && q_count[2] != -1))  {
+					level = -1;
+					continue;
+				}	
+			}
+			if (q_count[level] != -1 && mlfq_turn) {
+				for (i = 0; i <= q_count[level]; i++) {
+					if (q[level][i]->state != RUNNABLE)
+						continue;
+					p = q[level][i];
+					c->proc = q[level][i];
+					cprintf("from q%d name : %s, ticks : %d\n", level, p->name, p->ticks_in_queue);
+					switchuvm(p);
+					p->state = RUNNING;
+					swtch(&c->scheduler, p->context);
+					switchkvm();
+					mlfq_turn = 0;
+					totalticks += p->ticks;
+					//cprintf("pid : %d, ticks : %d\n", p->pid, p->ticks_in_queue);
+					p->ticks = 0;
+					if (level != 2 && p->ticks_in_queue >= allotment[level]) {
+						// If a process uses too much CPU time, it will be moved to a lower-priority queue.
+						q_count[level + 1]++;
+						c->proc->level++;
+						c->proc->ticks_in_queue = 0;
+						q[level + 1][q_count[level + 1]] = c->proc;
 
+						// delete process in queue
+						for (j = i; j <= q_count[level] - 1; j++)
+							q[level][j] = q[level][j + 1];
+
+						q[level][q_count[level]] = 0;
+						q_count[level]--;
+					}
+					c->proc = 0;
+				}
+			}
+		}
+
+	}
+	release(&ptable.lock);
   }
 }
 
@@ -449,6 +571,8 @@ void
 sleep(void *chan, struct spinlock *lk)
 {
   struct proc *p = myproc();
+  int level;
+  int i, j;
   
   if(p == 0)
     panic("sleep");
@@ -469,7 +593,17 @@ sleep(void *chan, struct spinlock *lk)
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
-
+  
+  // dequeue 
+  level = p->level;
+  for (i = 0; i <= q_count[level]; i++)
+	  if (p->pid == q[level][i]->pid)
+		  break;
+  for (j = i; j <= q_count[level] - 1; j++)
+	q[level][j] = q[level][j + 1];
+  q[level][q_count[level]] = 0;
+  q_count[level]--;
+  
   sched();
 
   // Tidy up.
@@ -489,10 +623,18 @@ static void
 wakeup1(void *chan)
 {
   struct proc *p;
+  int level, i;
 
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-    if(p->state == SLEEPING && p->chan == chan)
-      p->state = RUNNABLE;
+    if(p->state == SLEEPING && p->chan == chan) {
+		p->ticks = 0;
+		p->state = RUNNABLE;
+		level = p->level;
+		q_count[level]++;
+		for (i = q_count[level]; i > 0; i--)
+			q[level][i] = q[level][i - 1];
+		q[level][0] = p;
+	}
 }
 
 // Wake up all processes sleeping on chan.
