@@ -3,13 +3,16 @@
 ./swtch.S
 ./traps.h
 ./forktest.c
+./my_userapp.c
 ./ls.c
 ./mp.c
 ./rm.c
 ./proc.h
+./prac_syscall.c
 ./echo.c
 ./sleeplock.h
 ./sleeplock.c
+./test_yield.c
 ./pipe.c
 ./kalloc.c
 ./ide.c
@@ -24,6 +27,7 @@
 ./usertests.c
 ./defs.h
 ./mmu.h
+./test_mlfq.c
 ./trapasm.S
 ./fcntl.h
 ./sysfile.c
@@ -32,6 +36,7 @@
 ./ulib.c
 ./asm.h
 ./sh.c
+./test_master.c
 ./elf.h
 ./kill.c
 ./file.c
@@ -46,6 +51,7 @@
 ./ln.c
 ./param.h
 ./trap.c
+./test_stride.c
 ./date.h
 ./fs.h
 ./stressfs.c
@@ -62,6 +68,7 @@
 ./bio.c
 ./cat.c
 ./wc.c
+./test.c
 ./kbd.h
 ./console.c
 ./exec.c

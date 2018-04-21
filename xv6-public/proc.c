@@ -348,6 +348,7 @@ set_cpu_share(int share) {
 
 	struct proc *p;
 	int min_pass = mlfq_pass;
+	int i, j;
 	
 	// no negative share
 	if (share < 0) {
@@ -368,9 +369,18 @@ set_cpu_share(int share) {
 		if (p->state == RUNNABLE && p->stride != 0)
 			min_pass = (min_pass > p->pass) ? p->pass : min_pass;
 	}
-	release(&ptable.lock);
 
 	p = myproc();
+
+	// delete in mlfq
+	for (i = 0; i <= q_count[p->level]; i++) {
+		if (p == q[p->level][i]) {
+			for (j = i; j < q_count[p->level]; j++)
+				q[p->level][j] = q[p->level][j + 1];
+		}
+	}
+	q[p->level][q_count[p->level]] = 0;
+	q_count[p->level]--;
 
 	mlfq_share -= share;
 	mlfq_stride = (int)(10000 / mlfq_share);
@@ -378,6 +388,8 @@ set_cpu_share(int share) {
 	p->stride = (int)(10000 / share);
 	p->pass = min_pass;
 	stride_count++;
+
+	release(&ptable.lock);
 	return share;
 }
 
@@ -409,17 +421,15 @@ scheduler(void)
 
 	// Find minimum pass of process 
 	for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
-        continue;
-	  if (p->cpu_share != 0 && p->pass < min_pass) {
+	  if (p->state != RUNNABLE && p->cpu_share != 0 && p->pass < min_pass) {
 		min = p;
 		min_pass = p->pass;
 	  }
 	}
 
 	// if not mlfq is minimum pass
-	if (min) {
-		//cprintf("share : %d, pass : %d  \n", min->cpu_share, min->pass);
+	if (min_pass != mlfq_pass) {
+		cprintf("pass : %d\n", min_pass);
 		p = min;
 		p->pass += p->stride;
 		c->proc = p;
@@ -476,7 +486,7 @@ scheduler(void)
 						continue;
 					p = q[level][i];
 					c->proc = q[level][i];
-					//cprintf("from q%d name : %s, ticks : %d\n", level, p->name, p->ticks_in_queue);
+				//	cprintf("from q%d name : %s, ticks : %d\n", level, p->name, p->ticks_in_queue);
 					switchuvm(p);
 					p->state = RUNNING;
 					swtch(&c->scheduler, p->context);
@@ -603,6 +613,8 @@ sleep(void *chan, struct spinlock *lk)
 	q[level][j] = q[level][j + 1];
   q[level][q_count[level]] = 0;
   q_count[level]--;
+
+  p->pass = 0;
   
   sched();
 
@@ -628,12 +640,21 @@ wakeup1(void *chan)
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
     if(p->state == SLEEPING && p->chan == chan) {
 		p->ticks = 0;
-		p->state = RUNNABLE;
+		p->ticks_in_queue = 0;
+		p->level = 0;
 		level = 0;
-		q_count[level]++;
-		for (i = q_count[level]; i > 0; i--)
-			q[level][i] = q[level][i - 1];
-		q[level][0] = p;
+		// if process is in mlfq
+		if (p->stride == 0) {
+			
+			q_count[level]++;
+			for (i = q_count[level]; i > 0; i--)
+				q[level][i] = q[level][i - 1];
+			q[level][0] = p;
+		} // if process is in stride
+		else {
+			p->pass = mlfq_pass;				
+		}
+		p->state = RUNNABLE;
 	}
 }
 
