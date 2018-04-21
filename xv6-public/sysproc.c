@@ -48,10 +48,28 @@ sys_getppid(void)
 	return myproc()->parent->pid;
 }
 
+// yield the cpu to the next process
 void
 sys_yield(void)
 {
 	yield();
+}
+
+// get the level of current process ready queue of MLFQ.
+// Returns one of the level of MLFQ (0/1/2)
+int
+sys_getlev(void)
+{
+	return myproc()->level;
+}
+
+// inquires to obtain cpu share(%)
+int 
+sys_set_cpu_share(void)
+{
+	int share;
+	argint(0, &share);
+	return set_cpu_share(share);
 }
 
 int

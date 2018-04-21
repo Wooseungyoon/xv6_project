@@ -20,6 +20,11 @@ extern void trapret(void);
 
 static void wakeup1(void *chan);
 
+// stride
+int mlfq_pass = 0;
+int mlfq_share = 100;
+int mlfq_stride = (int)(10000 / 100);
+
 void
 pinit(void)
 {
@@ -309,6 +314,32 @@ wait(void)
     // Wait for children to exit.  (See wakeup1 call in proc_exit.)
     sleep(curproc, &ptable.lock);  //DOC: wait-sleep
   }
+}
+
+int
+set_cpu_share(int share) {
+
+	struct proc *p;
+	
+	// no negative share
+	if (share < 0) {
+		cprintf("No negative share!!!\n");
+		return -1;
+	}
+
+	// Total stride processes are able to get at most 80% of CPU time
+	if (mlfq_share - share <= 20) {
+		cprintf("Raise total stride share exceed 80%"); 
+		return -1;
+	}
+
+	p = myproc();
+
+	mlfq_share -= share;
+	mlfq_stride = (int)(10000 / mlfq_share);
+	p->cpu_share = share;
+	p->stride = (int)(10000 / share);
+	return share;
 }
 
 //PAGEBREAK: 42
