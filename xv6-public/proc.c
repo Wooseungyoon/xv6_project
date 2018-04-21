@@ -419,7 +419,7 @@ scheduler(void)
 
 	// if not mlfq is minimum pass
 	if (min) {
-		cprintf("from stide id =%d name =%s\n", min->pid,min->name);
+		//cprintf("share : %d, pass : %d  \n", min->cpu_share, min->pass);
 		p = min;
 		p->pass += p->stride;
 		c->proc = p;
@@ -457,6 +457,7 @@ scheduler(void)
 				q_count[0]++;
 			}
 			q_count[2] = -1;
+			totalticks = 0;
 		}
 
 		for (level = 0; level < 3; level++) {
@@ -475,7 +476,7 @@ scheduler(void)
 						continue;
 					p = q[level][i];
 					c->proc = q[level][i];
-					cprintf("from q%d name : %s, ticks : %d\n", level, p->name, p->ticks_in_queue);
+					//cprintf("from q%d name : %s, ticks : %d\n", level, p->name, p->ticks_in_queue);
 					switchuvm(p);
 					p->state = RUNNING;
 					swtch(&c->scheduler, p->context);
@@ -502,7 +503,6 @@ scheduler(void)
 				}
 			}
 		}
-
 	}
 	release(&ptable.lock);
   }
@@ -629,7 +629,7 @@ wakeup1(void *chan)
     if(p->state == SLEEPING && p->chan == chan) {
 		p->ticks = 0;
 		p->state = RUNNABLE;
-		level = p->level;
+		level = 0;
 		q_count[level]++;
 		for (i = q_count[level]; i > 0; i--)
 			q[level][i] = q[level][i - 1];
