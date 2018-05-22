@@ -359,7 +359,8 @@ wait(void)
 
     // Wait for children to exit.  (See wakeup1 call in proc_exit.)
     sleep(curproc, &ptable.lock);  //DOC: wait-sleep
-  }}
+  }
+}
 
 int
 set_cpu_share(int share) {
@@ -766,6 +767,7 @@ thread_create(thread_t * thread, void * (*start_routine)(void *), void *arg)
 
 	// Set address space except stack
 	np = curproc;
+	np->parent = curproc;
 
 	// Assign new stack
 	np->lsz = curproc->lsz;	// stack pointer for thread
@@ -794,13 +796,6 @@ thread_create(thread_t * thread, void * (*start_routine)(void *), void *arg)
 	thread->tid = np->tid;
 	thread->pid = curproc->pid;
 	
-	for(i = 0; i < NOFILE; i++)
-		if(curproc->ofile[i])
-			np->ofile[i] = filedup(curproc->ofile[i]);
-	np->cwd = idup(curproc->cwd);
-
-	safestrcpy(np->name, curproc->name, sizeof(curproc->name));
-
 	sp = np->lsz;
 
 	// Push argument strings, prepare rest of stack in ustack
@@ -826,6 +821,12 @@ thread_create(thread_t * thread, void * (*start_routine)(void *), void *arg)
 	np->tf->eip = start_routine;
 	np->tf->esp = sp;
 
+	acquire(&ptable.lock);
+
+	np->state = RUNNABLE;
+
+	release(&ptable.lock);
+
 	return 0;
 }
 
@@ -836,9 +837,128 @@ thread_create(thread_t * thread, void * (*start_routine)(void *), void *arg)
 void
 thread_exit(void * retval) 
 {
+	int fd;
+	struct proc *curproc = myproc();
+	int i;
+	int min_pass = mlfq_pass;
+	struct proc *p, *sp;
 
+	for(fd = 0; fd < NOFILE; fd++){
+		if(np->ofile[fd]){
+			fileclose(curproc->ofile[fd]);
+			curproc->ofile[fd] = 0;
+		}
+	}
+
+	begin_op();
+	iput(curproc->cwd);
+	end_op();
+	curproc->cwd = 0;
+	curproc->retval = retval;
+
+	acquire(&ptable.lock);
+	
+	for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+		if(p->state == SLEEPING && p->wtid = curproc->tid && p->pid == curproc->pid) {
+			p->ticks = 0;
+			p->level = 0;
+			p->state = RUNNABLE;
+			// if process is in mlfq
+			if (p->stride == 0) {
+				q_count[0]++;
+				for (i = q_count[0]; i > 0; i--)
+					q[0][i] = q[0][i - 1];
+				q[0][0] = p;
+			} // if process is in stride
+			else {
+				for (sp = ptable.proc; sp < &ptable.proc[NPROC]; sp++)
+					if (sp != p && sp->stride && sp->state == RUNNABLE)
+						min_pass = (min_pass > sp->pass) ? sp->pass : min_pass;
+				p->pass = min_pass;
+			}
+		}
+	p->retval = retval;
+	curproc->state = ZOMBIE;
+	sched();
+	panic("zombie exit");
+}
+
+// You must provide a method to wait for the thread 
+// specified by the argument to terminate. 
+// If that thread has already terminated, 
+// then this returns immediately. 
+// In the join function, you have to clean up the resources 
+// allocated to the thread such as a page table, allocated memories and stacks. 
+// You can get the return value of thread through this function.
+int
+thread_join(thread_t thread, void **retval)
+{
+	struct proc *p;
+	int havekids, pid;
+	int level, i, j;
+	struct proc *curproc = myproc();
+	curproc->wtid = thread;
+
+	acquire(&ptable.lock);
+	for(;;){
+		// Scan through table looking for exited children.
+		for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+			if(p->parent != curproc)
+				continue;
+			if(p->state == ZOMBIE && p->tid == thread){
+				// if p is in mlfq, must dequeue!!
+				level = p->level;
+				if (p->stride == 0) {
+					for (i = 0; i <= q_count[level]; i++) {
+						if (p == q[level][i]) {
+							for (j = i; j <= q_count[level] - 1; j++)
+								q[level][j] = q[level][j + 1];
+							q_count[level]--;
+							break;
+						}
+					}	
+				}
+				// Found one.
+				pid = p->pid;
+				kfree(p->kstack);
+				p->kstack = 0;
+				p->pid = 0;
+				p->parent = 0;
+				p->name[0] = 0;
+				p->killed = 0;
+				// initailize variables for sceduling
+				p->level = 0;
+				p->ticks = 0;
+				mlfq_share += p->cpu_share;
+				mlfq_stride = (int) (10000 / mlfq_share);
+				p->cpu_share = 0;
+				p->stride = 0;
+				p->pass = 0;
+				// initialize variables for LWP
+				p->is_LWP = 0;
+				p->lsz = KERNBASE;
+				p->num_LWP = 0;
+				p->tid = -1;
+				p->wtid = -1;
+				retval = &p->retval;
+
+				p->state = UNUSED;
+				release(&ptable.lock);
+				return 0;
+			}
+		}
+
+		// No point waiting if we don't have any children.
+		if(curproc->num_LWP || curproc->killed){
+			release(&ptable.lock);
+			return -1;
+		}
+
+		// Wait for children to exit.  (See wakeup1 call in proc_exit.)
+		sleep(curproc, &ptable.lock);  //DOC: wait-sleep
+	}
 }
 
 
 
-	
+

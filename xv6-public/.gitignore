@@ -1,3 +1,10 @@
+cscope.*
+cscope.files
+cscope.in.out
+cscope.out
+cscope.po.out
+.*.swp
+*.swp
 *~
 _*
 *.o
@@ -15,4 +22,3 @@ kernelmemfs
 mkfs
 .gdbinit
 
-cscope.*
