@@ -23,11 +23,15 @@ int getpid(void);
 char* sbrk(int);
 int sleep(int);
 int uptime(void);
-int myfunction(char *);
+int myfunction(char*);
 int getppid(void);
 int yield(void);
 int getlev(void);
 int set_cpu_share(int);
+int thread_create(thread_t*, void*, void*);
+void thread_exit(void*);
+int thread_join(thread_t, void**);
+
 
 // ulib.c
 int stat(char*, struct stat*);
