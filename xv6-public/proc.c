@@ -109,6 +109,14 @@ found:
   q_count[0]++;
   q[0][q_count[0]] = p;
 
+
+  // Set LWP options
+  p->is_LWP = 0;	// is process
+  p->lsz = KERNBASE;
+  p->num_LWP = 0;
+  p->tid = -1;
+  p->wtid = -1;
+
   release(&ptable.lock);
 
   // Allocate kernel stack.
@@ -351,8 +359,7 @@ wait(void)
 
     // Wait for children to exit.  (See wakeup1 call in proc_exit.)
     sleep(curproc, &ptable.lock);  //DOC: wait-sleep
-  }
-}
+  }}
 
 int
 set_cpu_share(int share) {
@@ -736,3 +743,102 @@ procdump(void)
     cprintf("\n");
   }
 }
+
+
+// Create threads within the process. 
+// From that point on, 
+// the execution routine assigned to each thread starts.
+// Return thread id
+int
+thread_create(thread_t * thread, void * (*start_routine)(void *), void *arg) 
+{
+	struct proc *np;
+	struct proc *curproc = myproc();
+	char *mem;
+	pde_t *pgdir = myproc()->pgdir;
+	uint argc, sp, ustack[3+MAXARG+1];
+
+
+	// Allocate thread
+	if(np = allocproc() == 0) {
+		return -1;
+	}
+
+	// Set address space except stack
+	np = curproc;
+
+	// Assign new stack
+	np->lsz = curproc->lsz;	// stack pointer for thread
+	curproc->lsz -= PGSIZE;
+
+	if (curproc->lsz <= curproc->sz)
+		return -1;
+
+	mem = kalloc();
+	if (mem == 0){
+		cprintf("thread create out of memory\n");
+		return -1;
+	}
+	memset(mem, 0, PGSIZE);
+	if (mappages(pgdir, (char*)curproc->lsz, PGSIZE, V2P(mem), PTE_W|PTE_U) < 0) {
+		cprintf("thread create out of memory\n");
+		kfree(mem);
+		return -1;
+	}
+	
+	// Set thread options
+	np->is_LWP = 1;
+	np->parent = curproc;
+	np->tid = curproc->num_LWP++;
+
+	thread->tid = np->tid;
+	thread->pid = curproc->pid;
+	
+	for(i = 0; i < NOFILE; i++)
+		if(curproc->ofile[i])
+			np->ofile[i] = filedup(curproc->ofile[i]);
+	np->cwd = idup(curproc->cwd);
+
+	safestrcpy(np->name, curproc->name, sizeof(curproc->name));
+
+	sp = np->lsz;
+
+	// Push argument strings, prepare rest of stack in ustack
+	for(argc = 0; arg[argc]; argc++) {
+		if(argc >= MAXARG)
+			return -1;
+		sp = (sp - (strlen(arg[argc]) + 1)) & ~3;
+		if (copyput(pgdir, sp, arg[argc], strlen(arg[argc]) + 1) < 0)
+			return -1;
+		ustack[3+argc] = sp;
+	}
+
+	ustack[3+argc] = 0;
+
+	ustack[0] = 0xffffffff;
+	ustack[1] = argc;
+	ustack[2] = sp - (argc+1)*4;
+
+	sp -= (3+argc+1) * 4;
+	if (copyout(pgdir, sp, ustack, (3+argc+1)*4) < 0)
+		return -1;
+
+	np->tf->eip = start_routine;
+	np->tf->esp = sp;
+
+	return 0;
+}
+
+// You must provide a method to terminate the thread in it. 
+// As the main function do, 
+// you call the thread_exit function at the last of a thread routine. 
+// Through this function, you must able to return a result of a thread.
+void
+thread_exit(void * retval) 
+{
+
+}
+
+
+
+	

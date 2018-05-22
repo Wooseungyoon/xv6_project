@@ -63,9 +63,9 @@ struct proc {
 
   // lwp
   int is_LWP;	// Is LWP?
-  uint ssz;		// New stack size pointer. When LWP created, ssz += PAGESIZE
+  uint lsz;		// New stack size pointer. When LWP created, ssz += PAGESIZE
   int num_LWP;	// Number of Active LWP
-  thread_t tid;		// If this thread is LWP, must have tid
+  int tid;	// If this thread is LWP, must have tid
   int wtid;		// If main thread wating a thread, use wtid
 
 };
