@@ -14,6 +14,9 @@ struct {
 
 static struct proc *initproc;
 
+// pgdir lock for assign LWP
+struct spinlock pgdirlock;
+
 int nextpid = 1;
 extern void forkret(void);
 extern void trapret(void);
@@ -365,7 +368,7 @@ wait(void)
 int
 set_cpu_share(int share) {
 
-	struct proc *p;
+	struct proc *p, *ip;
 	int min_pass = mlfq_pass;
 	int i, j;
 	
@@ -402,9 +405,23 @@ set_cpu_share(int share) {
 	// initialize variables for stride scheduling
 	mlfq_share -= share;
 	mlfq_stride = (int)(10000 / mlfq_share);
-	p->cpu_share = share;
-	p->stride = (int)(10000 / share);
-	p->pass = min_pass;
+	if(p->num_LWP > 0) {
+		int avg_share = (int)(share / p->num_LWP + 1);
+		p->cpu_share = avg_share;
+		p->stride = (int) (10000 / avg_share);
+		p->pass = min_pass;
+		for (ip = ptable.proc; ip < &ptable.proc[NPROC]; ip++) {
+			if (ip->parent == p) {
+				ip->cpu_share = avg_share;
+				ip->stride = (int) (10000 / avg_share); 
+				ip->pass = min_pass;
+			}
+		}
+	} else {
+		p->cpu_share = share;
+		p->stride = (int)(10000 / share);
+		p->pass = min_pass;
+	}
 
 	release(&ptable.lock);
 	return share;
@@ -744,8 +761,6 @@ procdump(void)
     cprintf("\n");
   }
 }
-
-
 // Create threads within the process. 
 // From that point on, 
 // the execution routine assigned to each thread starts.
@@ -753,77 +768,79 @@ procdump(void)
 int
 thread_create(thread_t * thread, void * (*start_routine)(void *), void *arg) 
 {
-	struct proc *np;
+	struct proc *np, *p;
 	struct proc *curproc = myproc();
-	char *mem;
-	pde_t *pgdir = myproc()->pgdir;
-	uint argc, sp, ustack[3+MAXARG+1];
+	uint sp, ustack[2];
+	int i, avg_share;
 
 
 	// Allocate thread
-	if(np = allocproc() == 0) {
+	if((np = allocproc()) == 0) {
 		return -1;
 	}
 
-	// Set address space except stack
-	np = curproc;
-	np->parent = curproc;
-
-	// Assign new stack
-	np->lsz = curproc->lsz;	// stack pointer for thread
-	curproc->lsz -= PGSIZE;
-
-	if (curproc->lsz <= curproc->sz)
-		return -1;
-
-	mem = kalloc();
-	if (mem == 0){
-		cprintf("thread create out of memory\n");
+	acquire(&pgdirlock);
+	// assgin new stack memory for LWP
+	curproc->sz = PGROUNDUP(curproc->sz);
+	if ((curproc->sz = allocuvm(curproc->pgdir, curproc->sz, curproc->sz + 2 * PGSIZE)) == 0) {
 		return -1;
 	}
-	memset(mem, 0, PGSIZE);
-	if (mappages(pgdir, (char*)curproc->lsz, PGSIZE, V2P(mem), PTE_W|PTE_U) < 0) {
-		cprintf("thread create out of memory\n");
-		kfree(mem);
-		return -1;
-	}
-	
+
+	sp = curproc->sz;
+
 	// Set thread options
 	np->is_LWP = 1;
 	np->parent = curproc;
 	np->tid = curproc->num_LWP++;
+	np->pgdir = curproc->pgdir;
+	np->sz = curproc->sz;
 
-	thread->tid = np->tid;
-	thread->pid = curproc->pid;
+	// set return value
+	*thread = np->tid;
 	
-	sp = np->lsz;
-
-	// Push argument strings, prepare rest of stack in ustack
-	for(argc = 0; arg[argc]; argc++) {
-		if(argc >= MAXARG)
-			return -1;
-		sp = (sp - (strlen(arg[argc]) + 1)) & ~3;
-		if (copyput(pgdir, sp, arg[argc], strlen(arg[argc]) + 1) < 0)
-			return -1;
-		ustack[3+argc] = sp;
-	}
-
-	ustack[3+argc] = 0;
+	release(&pgdirlock);
 
 	ustack[0] = 0xffffffff;
-	ustack[1] = argc;
-	ustack[2] = sp - (argc+1)*4;
+	ustack[1] = (uint)arg;
 
-	sp -= (3+argc+1) * 4;
-	if (copyout(pgdir, sp, ustack, (3+argc+1)*4) < 0)
+	sp -= 8;
+
+	if (copyout(np->pgdir, sp, ustack, 2*4) < 0)
 		return -1;
 
-	np->tf->eip = start_routine;
+	np->tf->eax = 0;
+	np->tf->eip = (uint)start_routine;
 	np->tf->esp = sp;
+
+	for(i = 0; i < NOFILE; i++)
+		if(curproc->ofile[i])
+			np->ofile[i] = filedup(curproc->ofile[i]);
+	np->cwd = idup(curproc->cwd);
+
+	safestrcpy(np->name, curproc->name, sizeof(curproc->name));
+
+	switchuvm(curproc);
 
 	acquire(&ptable.lock);
 
+	// If main thread is in stride scheduling, 
+	// assign new stride to all threads
+	
 	np->state = RUNNABLE;
+
+	if(np->parent->cpu_share != 0) {
+		avg_share = (int)(np->parent->cpu_share / np->parent->num_LWP + 1);
+		np->parent->cpu_share = avg_share;
+		np->parent->stride = (int) (10000 / avg_share);
+		for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+			if (p->parent == np->parent) {
+				p->cpu_share = np->parent->cpu_share;
+				p->stride = (int) (10000 / p->cpu_share); 
+				p->pass = np->parent->pass;
+			}
+		}
+	
+	}
 
 	release(&ptable.lock);
 
@@ -843,8 +860,11 @@ thread_exit(void * retval)
 	int min_pass = mlfq_pass;
 	struct proc *p, *sp;
 
+	if (curproc == initproc)
+		panic("init existing");
+
 	for(fd = 0; fd < NOFILE; fd++){
-		if(np->ofile[fd]){
+		if(curproc->ofile[fd]){
 			fileclose(curproc->ofile[fd]);
 			curproc->ofile[fd] = 0;
 		}
@@ -859,7 +879,7 @@ thread_exit(void * retval)
 	acquire(&ptable.lock);
 	
 	for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-		if(p->state == SLEEPING && p->wtid = curproc->tid && p->pid == curproc->pid) {
+		if(p->state == SLEEPING && p->wtid == curproc->tid && p->pid == curproc->pid) {
 			p->ticks = 0;
 			p->level = 0;
 			p->state = RUNNABLE;
@@ -877,8 +897,18 @@ thread_exit(void * retval)
 				p->pass = min_pass;
 			}
 		}
+
+	for(p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+		if (p->parent == curproc) {
+			p->parent = initproc;
+			if (p->state == ZOMBIE)
+				wakeup1(initproc);
+		}
+	}
+
 	p->retval = retval;
 	curproc->state = ZOMBIE;
+	p->num_LWP--;
 	sched();
 	panic("zombie exit");
 }
@@ -894,18 +924,19 @@ int
 thread_join(thread_t thread, void **retval)
 {
 	struct proc *p;
-	int havekids, pid;
-	int level, i, j;
+	int level, i, j, havekids;
 	struct proc *curproc = myproc();
 	curproc->wtid = thread;
 
 	acquire(&ptable.lock);
 	for(;;){
+		havekids = 0;
 		// Scan through table looking for exited children.
 		for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
 			if(p->parent != curproc)
 				continue;
 			if(p->state == ZOMBIE && p->tid == thread){
+				havekids = 1;
 				// if p is in mlfq, must dequeue!!
 				level = p->level;
 				if (p->stride == 0) {
@@ -918,8 +949,10 @@ thread_join(thread_t thread, void **retval)
 						}
 					}	
 				}
+
+				*retval = p->retval;
+
 				// Found one.
-				pid = p->pid;
 				kfree(p->kstack);
 				p->kstack = 0;
 				p->pid = 0;
@@ -936,11 +969,9 @@ thread_join(thread_t thread, void **retval)
 				p->pass = 0;
 				// initialize variables for LWP
 				p->is_LWP = 0;
-				p->lsz = KERNBASE;
 				p->num_LWP = 0;
 				p->tid = -1;
 				p->wtid = -1;
-				retval = &p->retval;
 
 				p->state = UNUSED;
 				release(&ptable.lock);
@@ -948,17 +979,17 @@ thread_join(thread_t thread, void **retval)
 			}
 		}
 
+			
 		// No point waiting if we don't have any children.
-		if(curproc->num_LWP || curproc->killed){
+		if(curproc->num_LWP || curproc->killed || !havekids){
 			release(&ptable.lock);
-			return -1;
+			return 0;
 		}
 
 		// Wait for children to exit.  (See wakeup1 call in proc_exit.)
 		sleep(curproc, &ptable.lock);  //DOC: wait-sleep
 	}
+	return 0;
 }
-
-
 
 

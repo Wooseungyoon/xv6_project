@@ -19,7 +19,6 @@
 ./x86.h
 ./memide.c
 ./spinlock.c
-./vectors.S
 ./zombie.c
 ./entry.S
 ./mkdir.c
