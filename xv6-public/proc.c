@@ -192,21 +192,27 @@ growproc(int n)
   uint sz;
   struct proc *curproc = myproc();
 
-  sz = curproc->sz;
-  if (curproc->is_LWP) 
+  if (curproc->is_LWP) {
 	  sz = curproc->parent->sz;
-	  
-  if(n > 0){
-    if((sz = allocuvm(curproc->pgdir, sz, sz + n)) == 0)
-      return -1;
-  } else if(n < 0){
-    if((sz = deallocuvm(curproc->pgdir, sz, sz + n)) == 0)
-      return -1;
-  }
-  if (curproc->is_LWP) 
+	  if(n > 0){
+		  if((sz = allocuvm(curproc->parent->pgdir, sz, sz + n)) == 0)
+			  return -1;
+	  } else if(n < 0){
+		  if((sz = deallocuvm(curproc->parent->pgdir, sz, sz + n)) == 0)
+			  return -1;
+	  }
 	  curproc->parent->sz = sz;
-  else
+  } else {
+	  sz = curproc->sz;
+	  if(n > 0){
+		  if((sz = allocuvm(curproc->pgdir, sz, sz + n)) == 0)
+			  return -1;
+	  } else if(n < 0){
+		  if((sz = deallocuvm(curproc->pgdir, sz, sz + n)) == 0)
+			  return -1;
+	  }
 	  curproc->sz = sz;
+  }
 
   switchuvm(curproc);
   return 0;
@@ -349,7 +355,7 @@ exit(void)
 		p->parent->num_LWP--;
 
 
-		if (!p->parent->num_LWP) {
+		if (!p->parent->num_LWP && p->parent->all_LWP) {
 			p->parent->sz = deallocuvm(p->parent->pgdir, p->parent->sz, p->parent->sz - (p->parent->all_LWP) * 2 * PGSIZE);
 			p->parent->all_LWP = 0;
 		}
