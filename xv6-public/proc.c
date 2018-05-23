@@ -115,7 +115,6 @@ found:
 
   // Set LWP options
   p->is_LWP = 0;	// is process
-  p->lsz = KERNBASE;
   p->num_LWP = 0;
   p->tid = -1;
   p->wtid = -1;
@@ -645,7 +644,7 @@ sleep(void *chan, struct spinlock *lk)
   // if p is in stride
 	  p->pass = 0;
   }
- 
+
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
@@ -773,7 +772,6 @@ thread_create(thread_t * thread, void * (*start_routine)(void *), void *arg)
 	uint sp, ustack[2];
 	int i, avg_share;
 
-
 	// Allocate thread
 	if((np = allocproc()) == 0) {
 		return -1;
@@ -794,6 +792,7 @@ thread_create(thread_t * thread, void * (*start_routine)(void *), void *arg)
 	np->tid = curproc->num_LWP++;
 	np->pgdir = curproc->pgdir;
 	np->sz = curproc->sz;
+	*np->tf = *curproc->tf;
 
 	// set return value
 	*thread = np->tid;
@@ -805,7 +804,7 @@ thread_create(thread_t * thread, void * (*start_routine)(void *), void *arg)
 
 	sp -= 8;
 
-	if (copyout(np->pgdir, sp, ustack, 2*4) < 0)
+	if (copyout(np->pgdir, sp, ustack, 8) < 0)
 		return -1;
 
 	np->tf->eax = 0;
@@ -839,7 +838,6 @@ thread_create(thread_t * thread, void * (*start_routine)(void *), void *arg)
 				p->pass = np->parent->pass;
 			}
 		}
-	
 	}
 
 	release(&ptable.lock);
@@ -879,7 +877,7 @@ thread_exit(void * retval)
 	acquire(&ptable.lock);
 	
 	for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-		if(p->state == SLEEPING && p->wtid == curproc->tid && p->pid == curproc->pid) {
+		if(p->state == SLEEPING && p->wtid == curproc->tid && p == curproc->parent) {
 			p->ticks = 0;
 			p->level = 0;
 			p->state = RUNNABLE;
@@ -906,9 +904,8 @@ thread_exit(void * retval)
 		}
 	}
 
-	p->retval = retval;
 	curproc->state = ZOMBIE;
-	p->num_LWP--;
+	curproc->retval = retval;
 	sched();
 	panic("zombie exit");
 }
@@ -933,10 +930,10 @@ thread_join(thread_t thread, void **retval)
 		havekids = 0;
 		// Scan through table looking for exited children.
 		for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-			if(p->parent != curproc)
+			if(p->parent != curproc || p->tid == thread)
 				continue;
-			if(p->state == ZOMBIE && p->tid == thread){
-				havekids = 1;
+			havekids = 1;
+			if(p->state == ZOMBIE){
 				// if p is in mlfq, must dequeue!!
 				level = p->level;
 				if (p->stride == 0) {
@@ -978,12 +975,11 @@ thread_join(thread_t thread, void **retval)
 				return 0;
 			}
 		}
-
 			
 		// No point waiting if we don't have any children.
-		if(curproc->num_LWP || curproc->killed || !havekids){
+		if(curproc->killed || !havekids){
 			release(&ptable.lock);
-			return 0;
+			return -1;
 		}
 
 		// Wait for children to exit.  (See wakeup1 call in proc_exit.)

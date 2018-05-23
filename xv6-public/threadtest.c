@@ -132,6 +132,7 @@ racingthreadmain(void *arg)
   int tid = (int) arg;
   int i;
   int tmp;
+
   for (i = 0; i < 10000000; i++){
     tmp = gcnt;
     tmp++;
@@ -157,7 +158,6 @@ racingtest(void)
   }
   for (i = 0; i < NUM_THREAD; i++){
     if (thread_join(threads[i], &retval) != 0 || (int)retval != i+1){
-		printf(1, "tid : %d, retval : %d\n", i, retval);
       printf(1, "panic at thread_join\n");
       return -1;
     }
