@@ -274,7 +274,7 @@ stressthreadmain(void *arg)
 int
 stresstest(void)
 {
-  const int nstress = 35000;
+  const int nstress = 1000;
   thread_t threads[NUM_THREAD];
   int i, n;
   void *retval;

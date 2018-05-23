@@ -205,8 +205,9 @@ growproc(int n)
   }
   if (curproc->is_LWP) 
 	  curproc->parent->sz = sz;
+  else
+	  curproc->sz = sz;
 
-  curproc->sz = sz;
   switchuvm(curproc);
   return 0;
 }
@@ -268,6 +269,7 @@ exit(void)
   struct proc *curproc = myproc();
   struct proc *p;
   int fd;
+  int i, j, level;
 
   if(curproc == initproc)
     panic("init exiting");
@@ -302,6 +304,21 @@ exit(void)
 
 	  // Jump into the scheduler, never to return.
 	  curproc->state = ZOMBIE;
+	  if (curproc->stride == 0) {
+		  level = curproc->level;
+		for (i = 0; i <= q_count[level]; i++)
+			if (curproc == q[level][i]) {
+				for (j = i; j <= q_count[level] - 1; j++)
+					q[level][j] = q[level][j + 1];
+				q[level][q_count[level]] = 0;
+				q_count[level]--;
+				break;
+			}
+	} 
+	else {
+		// if p is in stride
+		curproc->pass = 0;
+	}
 	  sched();
 	  panic("zombie exit");
 
@@ -330,6 +347,8 @@ exit(void)
 
 		acquire(&ptable.lock);
 		p->parent->num_LWP--;
+
+
 		if (!p->parent->num_LWP) {
 			p->parent->sz = deallocuvm(p->parent->pgdir, p->parent->sz, p->parent->sz - (p->parent->all_LWP) * 2 * PGSIZE);
 			p->parent->all_LWP = 0;
@@ -340,6 +359,23 @@ exit(void)
         p->parent = 0;
         p->name[0] = 0;
         p->killed = 0;
+		p->state = UNUSED;
+		if (p->stride == 0) {
+			level = p->level;
+			for (i = 0; i <= q_count[level]; i++)
+				if (p == q[level][i]) {
+					for (j = i; j <= q_count[level] - 1; j++)
+						q[level][j] = q[level][j + 1];
+					q[level][q_count[level]] = 0;
+					q_count[level]--;
+					break;
+				}
+		} 
+		else {
+			// if p is in stride
+			p->pass = 0;
+		}
+
 		// initailize variables for sceduling
 		p->level = 0;
 		p->ticks = 0;
@@ -376,6 +412,22 @@ exit(void)
 
 	// Jump into the scheduler, never to return.
 	curproc->state = ZOMBIE;
+	if (curproc->stride == 0) {
+		level = curproc->level;
+		for (i = 0; i <= q_count[level]; i++)
+			if (curproc == q[level][i]) {
+				for (j = i; j <= q_count[level] - 1; j++)
+					q[level][j] = q[level][j + 1];
+				q[level][q_count[level]] = 0;
+				q_count[level]--;
+				break;
+			}
+	} 
+	else {
+		// if p is in stride
+		curproc->pass = 0;
+	}
+
 	sched();
 	panic("zombie exit");
   }
@@ -406,7 +458,24 @@ exit(void)
         p->pid = 0;
         p->parent = 0;
         p->name[0] = 0;
-        p->killed = 0;
+		p->killed = 0;
+		p->state = UNUSED;
+		if (p->stride == 0) {
+			level = p->level;
+			for (i = 0; i <= q_count[level]; i++)
+				if (p == q[level][i]) {
+					for (j = i; j <= q_count[level] - 1; j++)
+						q[level][j] = q[level][j + 1];
+					q[level][q_count[level]] = 0;
+					q_count[level]--;
+					break;
+				}
+		} 
+		else {
+			// if p is in stride
+			p->pass = 0;
+		}
+
 		// initailize variables for sceduling
 		p->level = 0;
 		p->ticks = 0;
@@ -421,7 +490,6 @@ exit(void)
 		p->all_LWP = 0;
 		p->tid = -1;
 		p->wtid = -1;
-		p->state = UNUSED;
 	   }}
 	   release(&ptable.lock);
 
@@ -444,8 +512,23 @@ exit(void)
 		   parent->all_LWP = 0;
 	   }
 
-	   curproc->state = ZOMBIE;
 	   curproc->parent = curproc;
+	   curproc->state = ZOMBIE;
+	   if (curproc->stride == 0) {
+		   level = curproc->level;
+		   for (i = 0; i <= q_count[level]; i++)
+			   if (curproc == q[level][i]) {
+				   for (j = i; j <= q_count[level] - 1; j++)
+					   q[level][j] = q[level][j + 1];
+				   q[level][q_count[level]] = 0;
+				   q_count[level]--;
+				   break;
+			   }
+	   } 
+	   else {
+		   // if p is in stride
+		   curproc->pass = 0;
+	   }
 
 		for(fd = 0; fd < NOFILE; fd++){
 		   if(parent->ofile[fd]){
@@ -465,6 +548,22 @@ exit(void)
 
 	   // Jump into the scheduler, never to return.
 	   parent->state = ZOMBIE;
+		if (parent->stride == 0) {
+			level = parent->level;
+			for (i = 0; i <= q_count[level]; i++)
+				if (parent == q[level][i]) {
+					for (j = i; j <= q_count[level] - 1; j++)
+						q[level][j] = q[level][j + 1];
+					q[level][q_count[level]] = 0;
+					q_count[level]--;
+					break;
+				}
+		} 
+		else {
+			// if p is in stride
+			parent->pass = 0;
+		}
+
 	   sched();
 	   panic("zombie exit");
 
