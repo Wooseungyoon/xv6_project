@@ -64,6 +64,7 @@ struct proc {
   // lwp
   int is_LWP;	// Is LWP?
   int num_LWP;	// Number of Active LWP
+  int all_LWP;	// all number of LWP
   int tid;	// If this thread is LWP, must have tid
   int wtid;		// If main thread wating a thread, use wtid
   void* retval;	// return value of thread

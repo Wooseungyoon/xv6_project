@@ -116,6 +116,7 @@ found:
   // Set LWP options
   p->is_LWP = 0;	// is process
   p->num_LWP = 0;
+  p->all_LWP = 0;
   p->tid = -1;
   p->wtid = -1;
 
@@ -192,6 +193,9 @@ growproc(int n)
   struct proc *curproc = myproc();
 
   sz = curproc->sz;
+  if (curproc->is_LWP) 
+	  sz = curproc->parent->sz;
+	  
   if(n > 0){
     if((sz = allocuvm(curproc->pgdir, sz, sz + n)) == 0)
       return -1;
@@ -199,6 +203,9 @@ growproc(int n)
     if((sz = deallocuvm(curproc->pgdir, sz, sz + n)) == 0)
       return -1;
   }
+  if (curproc->is_LWP) 
+	  curproc->parent->sz = sz;
+
   curproc->sz = sz;
   switchuvm(curproc);
   return 0;
@@ -265,38 +272,205 @@ exit(void)
   if(curproc == initproc)
     panic("init exiting");
 
-  // Close all open files.
-  for(fd = 0; fd < NOFILE; fd++){
-    if(curproc->ofile[fd]){
-      fileclose(curproc->ofile[fd]);
-      curproc->ofile[fd] = 0;
-    }
+  // if curproc is process and has no thread
+  if (!curproc->is_LWP && !curproc->num_LWP) {
+	  for(fd = 0; fd < NOFILE; fd++){
+		  if(curproc->ofile[fd]){
+			  fileclose(curproc->ofile[fd]);
+			  curproc->ofile[fd] = 0;
+		  }
+	  }
+
+	  begin_op();
+	  iput(curproc->cwd);
+	  end_op();
+	  curproc->cwd = 0;
+
+	  acquire(&ptable.lock);
+
+	  // Parent might be sleeping in wait().
+	  wakeup1(curproc->parent);
+
+	  // Pass abandoned children to init.
+	  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+		  if(p->parent == curproc){
+			  p->parent = initproc;
+			  if(p->state == ZOMBIE)
+				  wakeup1(initproc);
+		  }
+	  }
+
+	  // Jump into the scheduler, never to return.
+	  curproc->state = ZOMBIE;
+	  sched();
+	  panic("zombie exit");
+
   }
 
-  begin_op();
-  iput(curproc->cwd);
-  end_op();
-  curproc->cwd = 0;
+	// if curproc is process and has some threads
+	else if (!curproc->is_LWP && curproc->num_LWP) {
+	acquire(&ptable.lock);
+	for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+		if (p->parent == curproc && p->is_LWP){
+			release(&ptable.lock);
 
-  acquire(&ptable.lock);
+		//if (p->parent != curproc || !p->is_LWP)
+		//	continue;
+		for(fd = 0; fd < NOFILE; fd++){
+			if(p->ofile[fd]){
+			  fileclose(p->ofile[fd]);
+			  p->ofile[fd] = 0;
+		  }
+		}
 
-  // Parent might be sleeping in wait().
-  wakeup1(curproc->parent);
+		begin_op();
+		iput(p->cwd);
+		end_op();
+		p->cwd = 0;
 
-  // Pass abandoned children to init.
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-    if(p->parent == curproc){
-      p->parent = initproc;
-      if(p->state == ZOMBIE)
-        wakeup1(initproc);
-    }
+		acquire(&ptable.lock);
+		p->parent->num_LWP--;
+		if (!p->parent->num_LWP) {
+			p->parent->sz = deallocuvm(p->parent->pgdir, p->parent->sz, p->parent->sz - (p->parent->all_LWP) * 2 * PGSIZE);
+			p->parent->all_LWP = 0;
+		}
+        kfree(p->kstack);
+        p->kstack = 0;
+        p->pid = 0;
+        p->parent = 0;
+        p->name[0] = 0;
+        p->killed = 0;
+		// initailize variables for sceduling
+		p->level = 0;
+		p->ticks = 0;
+		mlfq_share += p->cpu_share;
+		mlfq_stride = (int) (10000 / mlfq_share);
+		p->cpu_share = 0;
+		p->stride = 0;
+		p->pass = 0;
+		// initialize variables for LWP
+		p->is_LWP = 0;
+		p->num_LWP = 0;
+		p->all_LWP = 0;
+		p->tid = -1;
+		p->wtid = -1;
+	}}
+	release(&ptable.lock);
+
+	for(fd = 0; fd < NOFILE; fd++){
+		if(curproc->ofile[fd]){
+			fileclose(curproc->ofile[fd]);
+			curproc->ofile[fd] = 0;
+		}
+	}
+
+	begin_op();
+	iput(curproc->cwd);
+	end_op();
+	curproc->cwd = 0;
+
+	acquire(&ptable.lock);
+	// Parent might be sleeping in wait().
+	wakeup1(curproc->parent);
+
+
+	// Jump into the scheduler, never to return.
+	curproc->state = ZOMBIE;
+	sched();
+	panic("zombie exit");
   }
+   else if (curproc->is_LWP) {
+	   struct proc * parent = curproc->parent;
+	   acquire(&ptable.lock);
 
-  // Jump into the scheduler, never to return.
-  curproc->state = ZOMBIE;
-  sched();
-  panic("zombie exit");
+	   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+		if (p->parent == curproc->parent && p->is_LWP && p != curproc){
+			release(&ptable.lock);
+		for(fd = 0; fd < NOFILE; fd++){
+			if(p->ofile[fd]){
+			  fileclose(p->ofile[fd]);
+			  p->ofile[fd] = 0;
+		  }
+		}
+
+		begin_op();
+		iput(p->cwd);
+		end_op();
+		p->cwd = 0;
+		
+		acquire(&ptable.lock);
+		p->parent->num_LWP--;
+
+		kfree(p->kstack);
+		p->kstack = 0;
+        p->pid = 0;
+        p->parent = 0;
+        p->name[0] = 0;
+        p->killed = 0;
+		// initailize variables for sceduling
+		p->level = 0;
+		p->ticks = 0;
+		mlfq_share += p->cpu_share;
+		mlfq_stride = (int) (10000 / mlfq_share);
+		p->cpu_share = 0;
+		p->stride = 0;
+		p->pass = 0;
+		// initialize variables for LWP
+		p->is_LWP = 0;
+		p->num_LWP = 0;
+		p->all_LWP = 0;
+		p->tid = -1;
+		p->wtid = -1;
+		p->state = UNUSED;
+	   }}
+	   release(&ptable.lock);
+
+	   for(fd = 0; fd < NOFILE; fd++){
+		   if(curproc->ofile[fd]){
+			   fileclose(curproc->ofile[fd]);
+			   curproc->ofile[fd] = 0;
+		   }
+	   }
+
+	   begin_op();
+	   iput(curproc->cwd);
+	   end_op();
+	   curproc->cwd = 0;
+
+	   curproc->parent->num_LWP--;
+
+	   if (!parent->num_LWP && parent->all_LWP) {
+		   parent->sz = deallocuvm(parent->pgdir, parent->sz, parent->sz - (parent->all_LWP) * 2 * PGSIZE);
+		   parent->all_LWP = 0;
+	   }
+
+	   curproc->state = ZOMBIE;
+	   curproc->parent = curproc;
+
+		for(fd = 0; fd < NOFILE; fd++){
+		   if(parent->ofile[fd]){
+			   fileclose(parent->ofile[fd]);
+			   parent->ofile[fd] = 0;
+		   }
+	   }
+
+	   begin_op();
+	   iput(parent->cwd);
+	   end_op();
+	   parent->cwd = 0;
+		
+	   acquire(&ptable.lock);
+	   // Parent might be sleeping in wait().
+	   wakeup1(parent->parent);
+
+	   // Jump into the scheduler, never to return.
+	   parent->state = ZOMBIE;
+	   sched();
+	   panic("zombie exit");
+
+   }
 }
+	
 
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
@@ -346,6 +520,12 @@ wait(void)
 		p->cpu_share = 0;
 		p->stride = 0;
 		p->pass = 0;
+		// initialize variables for LWP
+		p->is_LWP = 0;
+		p->num_LWP = 0;
+		p->all_LWP = 0;
+		p->tid = -1;
+		p->wtid = -1;
 	
         p->state = UNUSED;
         release(&ptable.lock);
@@ -478,7 +658,7 @@ scheduler(void)
 
 		// boosting!!!!
 		if (totalticks >= 100) {
-			cprintf("[do boosting!]\n");
+			//cprintf("[do boosting!]\n");
 			for (i = 0, j = q_count[0] + 1; i <= q_count[1]; i++, j++) {
 				p = q[1][i];
 				q[0][j] = p;
@@ -514,6 +694,7 @@ scheduler(void)
 				for (i = 0; i <= q_count[level]; i++) {
 					if (q[level][i]->state != RUNNABLE) 
 						continue;
+					//cprintf("[%d] cnt_queue : %d, tid = %d\n", level, q_count[level], q[level][i]->tid);
 					p = q[level][i];
 					c->proc = q[level][i];
 					switchuvm(p);
@@ -790,6 +971,7 @@ thread_create(thread_t * thread, void * (*start_routine)(void *), void *arg)
 	np->is_LWP = 1;
 	np->parent = curproc;
 	np->tid = curproc->num_LWP++;
+	np->all_LWP++;
 	np->pgdir = curproc->pgdir;
 	np->sz = curproc->sz;
 	*np->tf = *curproc->tf;
@@ -854,9 +1036,11 @@ thread_exit(void * retval)
 {
 	int fd;
 	struct proc *curproc = myproc();
-	int i;
-	int min_pass = mlfq_pass;
-	struct proc *p, *sp;
+	//int i;
+	//int min_pass = mlfq_pass;
+	struct proc *p;
+	//struct proc  * sp;
+	int i, j, level;
 
 	if (curproc == initproc)
 		panic("init existing");
@@ -872,29 +1056,11 @@ thread_exit(void * retval)
 	iput(curproc->cwd);
 	end_op();
 	curproc->cwd = 0;
-	curproc->retval = retval;
 
+	//cprintf("try ptable lock~\n");
 	acquire(&ptable.lock);
-	
-	for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-		if(p->state == SLEEPING && p->wtid == curproc->tid && p == curproc->parent) {
-			p->ticks = 0;
-			p->level = 0;
-			p->state = RUNNABLE;
-			// if process is in mlfq
-			if (p->stride == 0) {
-				q_count[0]++;
-				for (i = q_count[0]; i > 0; i--)
-					q[0][i] = q[0][i - 1];
-				q[0][0] = p;
-			} // if process is in stride
-			else {
-				for (sp = ptable.proc; sp < &ptable.proc[NPROC]; sp++)
-					if (sp != p && sp->stride && sp->state == RUNNABLE)
-						min_pass = (min_pass > sp->pass) ? sp->pass : min_pass;
-				p->pass = min_pass;
-			}
-		}
+	//cprintf("lock ptablelock~~\n");
+	wakeup1(curproc->parent);
 
 	for(p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
 		if (p->parent == curproc) {
@@ -905,7 +1071,25 @@ thread_exit(void * retval)
 	}
 
 	curproc->state = ZOMBIE;
+	//cprintf("zombie tid : %d\n", curproc->tid);
 	curproc->retval = retval;
+	// if p is in mlfq, must delete in mlfq
+	if (curproc->stride == 0) {
+		level = curproc->level;
+		for (i = 0; i <= q_count[level]; i++)
+			if (curproc == q[level][i]) {
+				for (j = i; j <= q_count[level] - 1; j++)
+					q[level][j] = q[level][j + 1];
+				q[level][q_count[level]] = 0;
+				q_count[level]--;
+				break;
+			}
+	} 
+	else {
+		// if p is in stride
+		curproc->pass = 0;
+	}
+
 	sched();
 	panic("zombie exit");
 }
@@ -930,10 +1114,13 @@ thread_join(thread_t thread, void **retval)
 		havekids = 0;
 		// Scan through table looking for exited children.
 		for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-			if(p->parent != curproc || p->tid == thread)
+			if(p->parent != curproc)
 				continue;
+			//cprintf("try find tid : %d, %d\n", thread, p->tid);
 			havekids = 1;
-			if(p->state == ZOMBIE){
+			if(p->state == ZOMBIE && p->tid == thread){
+				//cprintf("find %d, tid : %d\n", thread, p->tid);
+				//cprintf("tid : %d\n",p->tid);
 				// if p is in mlfq, must dequeue!!
 				level = p->level;
 				if (p->stride == 0) {
@@ -967,6 +1154,7 @@ thread_join(thread_t thread, void **retval)
 				// initialize variables for LWP
 				p->is_LWP = 0;
 				p->num_LWP = 0;
+				p->all_LWP = 0;
 				p->tid = -1;
 				p->wtid = -1;
 
