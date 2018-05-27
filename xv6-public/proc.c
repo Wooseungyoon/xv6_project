@@ -195,10 +195,10 @@ growproc(int n)
   if (curproc->is_LWP) {
 	  sz = curproc->parent->sz;
 	  if(n > 0){
-		  if((sz = allocuvm(curproc->parent->pgdir, sz, sz + n)) == 0)
+		  if((sz = allocuvm(curproc->pgdir, sz, sz + n)) == 0)
 			  return -1;
 	  } else if(n < 0){
-		  if((sz = deallocuvm(curproc->parent->pgdir, sz, sz + n)) == 0)
+		  if((sz = deallocuvm(curproc->pgdir, sz, sz + n)) == 0)
 			  return -1;
 	  }
 	  curproc->parent->sz = sz;
@@ -354,11 +354,11 @@ exit(void)
 		acquire(&ptable.lock);
 		p->parent->num_LWP--;
 
-
+		/*
 		if (!p->parent->num_LWP && p->parent->all_LWP) {
 			p->parent->sz = deallocuvm(p->parent->pgdir, p->parent->sz, p->parent->sz - (p->parent->all_LWP) * 2 * PGSIZE);
 			p->parent->all_LWP = 0;
-		}
+		}*/
         kfree(p->kstack);
         p->kstack = 0;
         p->pid = 0;
@@ -514,10 +514,9 @@ exit(void)
 	   curproc->parent->num_LWP--;
 
 	   if (!parent->num_LWP && parent->all_LWP) {
-		   parent->sz = deallocuvm(parent->pgdir, parent->sz, parent->sz - (parent->all_LWP) * 2 * PGSIZE);
+		   parent->sz = deallocuvm(parent->pgdir, parent->sz, parent->sz - (parent->all_LWP - 1) * 2 * PGSIZE);
 		   parent->all_LWP = 0;
 	   }
-
 	   curproc->parent = curproc;
 	   curproc->state = ZOMBIE;
 	   if (curproc->stride == 0) {

@@ -3,7 +3,7 @@
 #include "user.h"
 
 #define NUM_THREAD 10
-#define NTEST 13
+#define NTEST 14
 
 // Show race condition
 int racingtest(void);
@@ -54,7 +54,7 @@ int (*testfunc[NTEST])(void) = {
   exittest1,
   exittest2,
   exectest,
-  //sbrktest,
+  sbrktest,
   killtest,
   pipetest,
   sleeptest,
@@ -70,7 +70,7 @@ char *testname[NTEST] = {
   "exittest1",
   "exittest2",
   "exectest",
-  //"sbrktest",
+  "sbrktest",
   "killtest",
   "pipetest",
   "sleeptest",
@@ -394,6 +394,7 @@ sbrkthreadmain(void *arg)
   char *end;
   char *c;
   oldbrk = sbrk(1000);
+  printf(1,"done?\n");
   end = oldbrk + 1000;
   for (c = oldbrk; c < end; c++){
     *c = tid+1;
